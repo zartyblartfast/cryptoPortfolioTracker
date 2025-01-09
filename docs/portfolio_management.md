@@ -8,9 +8,21 @@
   - Name
   - List of cryptocurrencies with amounts
 
-### 2. Key Functions
+### 2. User Interaction Methods
 
-#### addToPortfolio
+#### Adding Cryptocurrencies
+**Multiple methods must be preserved:**
+1. Long-press on cryptocurrency in list view
+   - Quick add functionality
+   - Opens add to portfolio dialog
+   - Must remain as primary quick-add method
+
+2. Detail screen add button
+   - Secondary method through CryptoDetailScreen
+   - Provides same portfolio selection dialog
+   - Maintains consistency with quick-add method
+
+#### Portfolio Dialog Implementation
 ```dart
 void addToPortfolio(Cryptocurrency crypto)
 ```
@@ -27,52 +39,51 @@ void addToPortfolio(Cryptocurrency crypto)
 - TextField for amount input
 - Proper state management using setDialogState
 
-#### Portfolio State Management
+### 3. State Management
+
+#### Portfolio State
 - `selectedPortfolioIndex` tracks the current portfolio
 - Portfolio changes are always followed by `savePortfolios()`
 - State updates use `setState` for UI refresh
+- Default portfolio is created if none exists
 
-### 3. Important UI Elements
+#### Data Persistence
+- Uses SharedPreferences for storage
+- Automatic saving on all portfolio changes
+- Loads portfolios on app initialization
 
-#### Dropdown Implementation
-- Uses standard Flutter `DropdownButton`
-- Maintains value synchronization with `selectedPortfolioIndex`
-- Works within dialog context using `StatefulBuilder`
+### 4. API Integration
 
-#### Dialog Structure
-```dart
-AlertDialog(
-  title: Text(...),
-  content: Column(
-    mainAxisSize: MainAxisSize.min,
-    children: [
-      DropdownButton<int>(...),
-      TextField(...)
-    ]
-  )
-)
-```
+#### ApiService
+- Handles all CoinCap API communications
+- Updates cryptocurrency prices periodically
+- Maintains separation of concerns
+- Supports dependency injection for testing
 
-## Guidelines for Modifications
+### 5. Testing Considerations
 
-### DO NOT:
-1. Change the basic dialog structure
-2. Modify the state management pattern
-3. Replace standard DropdownButton without thorough testing
-4. Add constraints that might affect dialog layout
-5. Modify the portfolio saving mechanism
+#### Required Test Coverage
+- Portfolio model unit tests
+- Widget tests for portfolio interactions
+- Mock API responses for testing
+- Dialog interaction tests
 
-### Safe to Modify:
-1. Visual styling (colors, padding, etc.)
-2. Input validation logic
-3. Success/error messages
-4. Additional non-critical UI elements
+### 6. Implementation Guidelines
 
-## Testing New Changes
-1. Always test portfolio selection
-2. Verify amount input works
-3. Confirm save operation completes
-4. Check portfolio updates in UI
-5. Verify persistence across app restarts
+#### DO NOT Remove or Modify:
+1. Long-press functionality for quick adds
+2. Any existing portfolio management features
+3. Working dialog implementations
+4. Multiple methods for adding cryptocurrencies
 
-Remember: The current implementation is stable and working. Any changes should be incremental and thoroughly tested before merging.
+#### When Making Changes:
+1. Preserve all existing user interaction methods
+2. Maintain current dialog structures
+3. Keep both quick-add and detail view add methods
+4. Test all portfolio operations after changes
+
+### 7. Error Handling
+- Validate all user inputs
+- Handle API failures gracefully
+- Prevent portfolio data loss
+- Maintain at least one portfolio at all times
