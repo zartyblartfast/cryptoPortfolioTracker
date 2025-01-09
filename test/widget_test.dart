@@ -7,24 +7,58 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
-
 import 'package:crypto_portfolio_tracker/main.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:http/http.dart' as http;
+import 'package:mockito/mockito.dart';
+import 'package:mockito/annotations.dart';
+import 'package:crypto_portfolio_tracker/services/api_service.dart';
+
+@GenerateNiceMocks([MockSpec<http.Client>()])
+import 'widget_test.mocks.dart';
 
 void main() {
-  testWidgets('Counter increments smoke test', (WidgetTester tester) async {
+  late MockClient mockClient;
+  late ApiService apiService;
+
+  setUp(() async {
+    // Initialize SharedPreferences
+    SharedPreferences.setMockInitialValues({});
+    mockClient = MockClient();
+    apiService = ApiService(client: mockClient);
+
+    // Mock the HTTP response
+    when(mockClient.get(Uri.parse('https://api.coincap.io/v2/assets')))
+        .thenAnswer((_) async => http.Response(
+              '{"data": []}',
+              200,
+            ));
+  });
+
+  testWidgets('App should render with correct title', (WidgetTester tester) async {
     // Build our app and trigger a frame.
-    await tester.pumpWidget(const MyApp());
-
-    // Verify that our counter starts at 0.
-    expect(find.text('0'), findsOneWidget);
-    expect(find.text('1'), findsNothing);
-
-    // Tap the '+' icon and trigger a frame.
-    await tester.tap(find.byIcon(Icons.add));
+    await tester.pumpWidget(const CryptoPortfolioApp());
+    
+    // Wait for the first frame
     await tester.pump();
 
-    // Verify that our counter has incremented.
-    expect(find.text('0'), findsNothing);
-    expect(find.text('1'), findsOneWidget);
+    // Verify that the app title is displayed
+    expect(find.text('Crypto Portfolio Tracker'), findsOneWidget);
+
+    // Verify that we have two tabs
+    expect(find.text('Cryptocurrencies'), findsOneWidget);
+    expect(find.text('Portfolio'), findsOneWidget);
+  });
+
+  testWidgets('Search field should be present after loading', (WidgetTester tester) async {
+    // Build our app and trigger a frame.
+    await tester.pumpWidget(const CryptoPortfolioApp());
+    
+    // Wait for loading to complete
+    await tester.pump();
+    await tester.pumpAndSettle();
+
+    // Verify that the search field is present
+    expect(find.byType(TextField), findsOneWidget);
   });
 }
