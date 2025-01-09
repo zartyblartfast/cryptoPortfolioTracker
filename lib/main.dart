@@ -3,10 +3,12 @@ import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
-import 'package:file_picker/file_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'models/cryptocurrency.dart';
+import 'models/portfolio.dart';
+import 'models/api_source.dart';
 import 'screens/crypto_detail_screen.dart';
+import 'services/api_service.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -30,17 +32,13 @@ class CryptoPortfolioApp extends StatelessWidget {
   }
 }
 
-class Portfolio {
-  String name;
-  List<Cryptocurrency> cryptocurrencies;
-
-  Portfolio({required this.name, required this.cryptocurrencies});
-
-  double get totalValue {
-    return cryptocurrencies.fold(0, (sum, item) => sum + item.value);
-  }
-}
-
+/// CryptoListScreen is a critical component that implements the main cryptocurrency list view.
+/// 
+/// CRITICAL FEATURES - DO NOT MODIFY WITHOUT EXPLICIT REQUEST:
+/// 1. Column layout showing all cryptocurrency data
+/// 2. Long-press to add functionality
+/// 3. Navigation to detail view
+/// 4. Search functionality
 class CryptoListScreen extends StatefulWidget {
   const CryptoListScreen({Key? key}) : super(key: key);
 
@@ -48,111 +46,91 @@ class CryptoListScreen extends StatefulWidget {
   _CryptoListScreenState createState() => _CryptoListScreenState();
 }
 
-class _CryptoListScreenState extends State<CryptoListScreen> {
+class _CryptoListScreenState extends State<CryptoListScreen> with SingleTickerProviderStateMixin {
+  final ApiService apiService = ApiService();
+  List<Portfolio> portfolios = [];
   List<Cryptocurrency> cryptoList = [];
   List<Cryptocurrency> filteredCryptoList = [];
-  List<Portfolio> portfolios = [];
   int selectedPortfolioIndex = 0;
   bool isLoading = true;
   TextEditingController searchController = TextEditingController();
+  late TabController _tabController;
 
   @override
   void initState() {
     super.initState();
-    loadPortfolios().then((_) {
-      fetchCryptoData();
-      setState(() {}); // Trigger a rebuild after loading portfolios
-    });
+    _tabController = TabController(length: 2, vsync: this);
+    _tabController.addListener(_handleTabChange);
+    portfolios = [Portfolio(name: 'Main Portfolio', cryptocurrencies: [])];
+    loadPortfolios();
+    fetchCryptoData();
+  }
+
+  @override
+  void dispose() {
+    _tabController.removeListener(_handleTabChange);
+    _tabController.dispose();
+    searchController.dispose();
+    super.dispose();
+  }
+
+  void _handleTabChange() {
+    if (_tabController.index == 0) { // Cryptocurrencies tab
+      filterCryptoList(searchController.text);
+    }
   }
 
   Future<void> savePortfolios() async {
-    print('Saving portfolios...'); // Debug print
     final prefs = await SharedPreferences.getInstance();
-    final List<Map<String, dynamic>> encodedPortfolios = portfolios.map((portfolio) {
-      return {
-        'name': portfolio.name,
-        'cryptocurrencies': portfolio.cryptocurrencies.map((crypto) => {
-          'id': crypto.id,
-          'name': crypto.name,
-          'symbol': crypto.symbol,
-          'price': crypto.price,
-          'percentChange24h': crypto.percentChange24h,
-          'marketCap': crypto.marketCap,
-          'volume24h': crypto.volume24h,
-          'rank': crypto.rank,
-          'amount': crypto.amount,
-        }).toList(),
-      };
-    }).toList();
-    final encodedData = json.encode(encodedPortfolios);
-    final success = await prefs.setString('portfolios', encodedData);
-    print('Portfolios saved: $encodedData');  // Debug print
-    print('Save operation success: $success'); // Debug print
+    final portfoliosJson = portfolios.map((portfolio) => portfolio.toJson()).toList();
+    final success = await prefs.setString('portfolios', jsonEncode(portfoliosJson));
+    print('Saving portfolios...');
+    print('Portfolios saved: ${jsonEncode(portfoliosJson)}');
+    print('Save operation success: $success');
     
-    // Verify that the data was saved correctly
-    final savedData = prefs.getString('portfolios');
-    print('Verification - Saved data: $savedData');
-    
-    // Print all keys in SharedPreferences
+    // Verification
+    print('Verification - Saved data: ${jsonEncode(portfoliosJson)}');
     print('All keys in SharedPreferences: ${prefs.getKeys()}');
-
-    // Check if the data was actually saved
-    await checkSharedPreferences();
+    
+    // Check the data was actually saved
+    checkSharedPreferences();
   }
 
   Future<void> loadPortfolios() async {
-    print('Loading portfolios...'); // Debug print
-    final prefs = await SharedPreferences.getInstance();
-    final String? encodedData = prefs.getString('portfolios');
-    print('Loaded portfolios data: $encodedData');  // Debug print
-    print('All keys in SharedPreferences: ${prefs.getKeys()}'); // Debug print
-    if (encodedData != null && encodedData.isNotEmpty) {
-      try {
-        final List<dynamic> decodedData = json.decode(encodedData);
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final portfoliosJson = prefs.getString('portfolios');
+      if (portfoliosJson != null) {
+        final List<dynamic> decoded = jsonDecode(portfoliosJson);
         setState(() {
-          portfolios = decodedData.map((portfolioData) {
-            return Portfolio(
-              name: portfolioData['name'],
-              cryptocurrencies: (portfolioData['cryptocurrencies'] as List<dynamic>).map((item) => Cryptocurrency(
-                id: item['id'],
-                name: item['name'],
-                symbol: item['symbol'],
-                price: item['price'].toDouble(),
-                percentChange24h: item['percentChange24h'].toDouble(),
-                marketCap: item['marketCap'].toDouble(),
-                volume24h: item['volume24h'].toDouble(),
-                rank: item['rank'],
-                amount: item['amount'].toDouble(),
-              )).toList(),
-            );
-          }).toList();
+          portfolios = decoded.map((json) => Portfolio.fromJson(json)).toList();
         });
-      } catch (e) {
-        print('Error decoding portfolio data: $e');  // Debug print
+      } else {
+        setState(() {
+          portfolios = [Portfolio(name: 'Main Portfolio', cryptocurrencies: [])];
+        });
       }
-    } else {
-      print('No saved portfolio data found'); // Debug print
+    } catch (e) {
+      print('Error loading portfolios: $e');
+      setState(() {
+        portfolios = [Portfolio(name: 'Main Portfolio', cryptocurrencies: [])];
+      });
     }
-    if (portfolios.isEmpty) {
-      portfolios.add(Portfolio(name: 'Main Portfolio', cryptocurrencies: []));
-      print('Added default portfolio'); // Debug print
-    }
-    print('Portfolios after loading: $portfolios');  // Debug print
   }
 
   Future<void> clearSharedPreferences() async {
-    print('Clearing SharedPreferences...'); // Debug print
     final prefs = await SharedPreferences.getInstance();
     await prefs.clear();
-    print('SharedPreferences cleared'); // Debug print
-    await checkSharedPreferences();
+    print('SharedPreferences cleared');
+    checkSharedPreferences();
   }
 
   Future<void> checkSharedPreferences() async {
-    print('Checking SharedPreferences...'); // Debug print
     final prefs = await SharedPreferences.getInstance();
-    final String? encodedData = prefs.getString('portfolios');
-    print('Current portfolios data in SharedPreferences: $encodedData');
+    print('Checking SharedPreferences...');
+    final portfoliosJson = prefs.getString('portfolios');
+    print('Current portfolios data in SharedPreferences:');
+    print(portfoliosJson);
     print('All keys in SharedPreferences: ${prefs.getKeys()}');
   }
 
@@ -160,20 +138,17 @@ class _CryptoListScreenState extends State<CryptoListScreen> {
     setState(() {
       isLoading = true;
     });
+
     try {
-      final response = await http.get(Uri.parse('https://api.coinpaprika.com/v1/tickers'));
-      if (response.statusCode == 200) {
-        final List<dynamic> jsonData = json.decode(response.body);
-        setState(() {
-          cryptoList = jsonData.map((data) => Cryptocurrency.fromJson(data)).toList();
-          filteredCryptoList = List.from(cryptoList);
-          isLoading = false;
-        });
-      } else {
-        throw Exception('Failed to load crypto data: ${response.statusCode}');
-      }
+      final cryptos = await apiService.fetchCryptoData();
+      setState(() {
+        cryptoList = cryptos;
+        filteredCryptoList = List.from(cryptoList);
+        isLoading = false;
+      });
+      updatePortfolioValues();
     } catch (e) {
-      print('Error fetching crypto data: $e');
+      print('Error fetching data: $e');
       setState(() {
         isLoading = false;
       });
@@ -184,22 +159,33 @@ class _CryptoListScreenState extends State<CryptoListScreen> {
   }
 
   void updatePortfolioValues() {
+    for (var portfolio in portfolios) {
+      for (var portfolioCrypto in portfolio.cryptocurrencies) {
+        final currentData = cryptoList.firstWhere(
+          (c) => c.id == portfolioCrypto.id,
+          orElse: () => portfolioCrypto,
+        );
+        portfolioCrypto.price = currentData.price;
+        portfolioCrypto.percentChange24h = currentData.percentChange24h;
+        portfolioCrypto.marketCap = currentData.marketCap;
+        portfolioCrypto.volume24h = currentData.volume24h;
+        portfolioCrypto.rank = currentData.rank;
+      }
+    }
+  }
+
+  void filterCryptoList(String query) {
     setState(() {
-      for (var portfolio in portfolios) {
-        for (var portfolioCrypto in portfolio.cryptocurrencies) {
-          final updatedCrypto = cryptoList.firstWhere(
-            (crypto) => crypto.id == portfolioCrypto.id,
-            orElse: () => portfolioCrypto,
-          );
-          portfolioCrypto.price = updatedCrypto.price;
-          portfolioCrypto.percentChange24h = updatedCrypto.percentChange24h;
-          portfolioCrypto.marketCap = updatedCrypto.marketCap;
-          portfolioCrypto.volume24h = updatedCrypto.volume24h;
-          portfolioCrypto.rank = updatedCrypto.rank;
-        }
+      if (query.isEmpty) {
+        filteredCryptoList = List.from(cryptoList);
+      } else {
+        filteredCryptoList = cryptoList
+            .where((crypto) =>
+                crypto.name.toLowerCase().contains(query.toLowerCase()) ||
+                crypto.symbol.toLowerCase().contains(query.toLowerCase()))
+            .toList();
       }
     });
-    savePortfolios();
   }
 
   @override
@@ -209,111 +195,207 @@ class _CryptoListScreenState extends State<CryptoListScreen> {
       child: Scaffold(
         appBar: AppBar(
           title: const Text('Crypto Portfolio Tracker'),
-          bottom: const TabBar(
-            tabs: [
+          bottom: TabBar(
+            controller: _tabController,
+            tabs: const [
               Tab(text: 'Cryptocurrencies'),
               Tab(text: 'Portfolio'),
             ],
           ),
+          actions: [
+            IconButton(
+              icon: Icon(Icons.refresh),
+              onPressed: fetchCryptoData,
+            ),
+          ],
         ),
         body: TabBarView(
+          controller: _tabController,
           children: [
             buildCryptocurrenciesTab(),
             buildPortfolioTab(),
           ],
         ),
-        floatingActionButton: FloatingActionButton(
-          onPressed: () {
-            fetchCryptoData();
-            updatePortfolioValues();
-          },
-          child: Icon(Icons.refresh),
-          tooltip: 'Refresh Data',
-        ),
       ),
     );
   }
 
+  /// Builds the cryptocurrency list view with all required columns and interactions.
+  /// 
+  /// CRITICAL IMPLEMENTATION NOTES:
+  /// 1. Maintains column layout with specific flex values
+  /// 2. Preserves long-press and tap interactions
+  /// 3. Keeps all data formatting (currency, percentages, B/M suffixes)
   Widget buildCryptocurrenciesTab() {
+    if (isLoading) {
+      return Center(child: CircularProgressIndicator());
+    }
+
     return Column(
       children: [
         Padding(
           padding: const EdgeInsets.all(8.0),
-          child: TextField(
-            controller: searchController,
-            decoration: InputDecoration(
-              labelText: 'Search',
-              hintText: 'Enter a cryptocurrency name or symbol',
-              prefixIcon: Icon(Icons.search),
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(10),
+          child: Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  decoration: InputDecoration(
+                    labelText: 'Search cryptocurrencies',
+                    border: OutlineInputBorder(),
+                  ),
+                  controller: searchController,
+                  onChanged: filterCryptoList,
+                ),
               ),
-            ),
-            onChanged: filterCryptoList,
+              const SizedBox(width: 16),
+              DropdownButton<ApiSource>(
+                value: apiService.currentSource,
+                items: ApiSource.values.map((source) {
+                  return DropdownMenuItem<ApiSource>(
+                    value: source,
+                    child: Text(source.displayName),
+                  );
+                }).toList(),
+                onChanged: (ApiSource? newSource) {
+                  if (newSource != null) {
+                    setState(() {
+                      apiService.currentSource = newSource;
+                    });
+                    fetchCryptoData();
+                  }
+                },
+              ),
+            ],
           ),
         ),
         Expanded(
-          child: isLoading
-              ? const Center(child: CircularProgressIndicator())
-              : Column(
-                  children: [
-                    Padding(
-                      padding: const EdgeInsets.all(8.0),
-                      child: Row(
-                        children: [
-                          Expanded(child: Text('Name', style: TextStyle(fontWeight: FontWeight.bold))),
-                          Expanded(child: Text('Symbol', style: TextStyle(fontWeight: FontWeight.bold))),
-                          Expanded(child: Text('Price', style: TextStyle(fontWeight: FontWeight.bold))),
-                          Expanded(child: Text('24h %', style: TextStyle(fontWeight: FontWeight.bold))),
-                          Expanded(child: Text('Market Cap', style: TextStyle(fontWeight: FontWeight.bold))),
-                          Expanded(child: Text('Volume (24h)', style: TextStyle(fontWeight: FontWeight.bold))),
-                          Expanded(child: Text('Rank', style: TextStyle(fontWeight: FontWeight.bold))),
-                        ],
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(8.0),
+                child: Row(
+                  children: const [
+                    Expanded(
+                      flex: 3,
+                      child: Text(
+                        'Name',
+                        style: TextStyle(fontWeight: FontWeight.bold),
                       ),
                     ),
                     Expanded(
-                      child: ListView.builder(
-                        itemCount: filteredCryptoList.length,
-                        itemBuilder: (context, index) {
-                          final crypto = filteredCryptoList[index];
-                          return InkWell(
-                            onTap: () => Navigator.push(
-                              context,
-                              MaterialPageRoute(
-                                builder: (context) => CryptoDetailScreen(
-                                  crypto: crypto,
-                                  addToPortfolio: addToPortfolio,
-                                ),
-                              ),
-                            ),
-                            onLongPress: () => addToPortfolio(crypto),
-                            child: Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 8.0, horizontal: 4.0),
-                              child: Row(
-                                children: [
-                                  Expanded(child: Text(crypto.name)),
-                                  Expanded(child: Text(crypto.symbol)),
-                                  Expanded(child: Text('\$${crypto.price.toStringAsFixed(2)}')),
-                                  Expanded(
-                                    child: Text(
-                                      '${crypto.percentChange24h.toStringAsFixed(2)}%',
-                                      style: TextStyle(
-                                        color: crypto.percentChange24h >= 0 ? Colors.green : Colors.red,
-                                      ),
-                                    ),
-                                  ),
-                                  Expanded(child: Text('\$${(crypto.marketCap / 1e9).toStringAsFixed(2)}B')),
-                                  Expanded(child: Text('\$${(crypto.volume24h / 1e6).toStringAsFixed(2)}M')),
-                                  Expanded(child: Text('${crypto.rank}')),
-                                ],
-                              ),
-                            ),
-                          );
-                        },
+                      flex: 2,
+                      child: Text(
+                        'Price',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                        textAlign: TextAlign.right,
+                      ),
+                    ),
+                    Expanded(
+                      flex: 2,
+                      child: Text(
+                        '24h %',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                        textAlign: TextAlign.right,
+                      ),
+                    ),
+                    Expanded(
+                      flex: 3,
+                      child: Text(
+                        'Market Cap',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                        textAlign: TextAlign.right,
+                      ),
+                    ),
+                    Expanded(
+                      flex: 3,
+                      child: Text(
+                        'Volume (24h)',
+                        style: TextStyle(fontWeight: FontWeight.bold),
+                        textAlign: TextAlign.right,
                       ),
                     ),
                   ],
                 ),
+              ),
+              Expanded(
+                child: ListView.builder(
+                  itemCount: filteredCryptoList.length,
+                  itemBuilder: (context, index) {
+                    final crypto = filteredCryptoList[index];
+                    return Card(
+                      child: InkWell(
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => CryptoDetailScreen(
+                                crypto: crypto,
+                                addToPortfolio: addToPortfolio,
+                              ),
+                            ),
+                          );
+                        },
+                        onLongPress: () => addToPortfolio(crypto),
+                        child: Padding(
+                          padding: const EdgeInsets.all(8.0),
+                          child: Row(
+                            children: [
+                              Expanded(
+                                flex: 3,
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    Text(
+                                      crypto.name,
+                                      style: const TextStyle(fontWeight: FontWeight.bold),
+                                    ),
+                                    Text(crypto.symbol),
+                                  ],
+                                ),
+                              ),
+                              Expanded(
+                                flex: 2,
+                                child: Text(
+                                  '\$${crypto.price.toStringAsFixed(2)}',
+                                  textAlign: TextAlign.right,
+                                ),
+                              ),
+                              Expanded(
+                                flex: 2,
+                                child: Text(
+                                  '${crypto.percentChange24h.toStringAsFixed(2)}%',
+                                  textAlign: TextAlign.right,
+                                  style: TextStyle(
+                                    color: crypto.percentChange24h >= 0
+                                        ? Colors.green
+                                        : Colors.red,
+                                  ),
+                                ),
+                              ),
+                              Expanded(
+                                flex: 3,
+                                child: Text(
+                                  '\$${(crypto.marketCap / 1000000000).toStringAsFixed(2)}B',
+                                  textAlign: TextAlign.right,
+                                ),
+                              ),
+                              Expanded(
+                                flex: 3,
+                                child: Text(
+                                  '\$${(crypto.volume24h / 1000000).toStringAsFixed(2)}M',
+                                  textAlign: TextAlign.right,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
+              ),
+            ],
+          ),
         ),
       ],
     );
@@ -344,7 +426,10 @@ class _CryptoListScreenState extends State<CryptoListScreen> {
               onPressed: () {
                 if (newPortfolioName.isNotEmpty) {
                   setState(() {
-                    portfolios.add(Portfolio(name: newPortfolioName, cryptocurrencies: []));
+                    portfolios.add(Portfolio(
+                      name: newPortfolioName,
+                      cryptocurrencies: [],
+                    ));
                     selectedPortfolioIndex = portfolios.length - 1;
                   });
                   savePortfolios();
@@ -359,6 +444,10 @@ class _CryptoListScreenState extends State<CryptoListScreen> {
   }
 
   Widget buildPortfolioTab() {
+    if (portfolios.isEmpty) {
+      return Center(child: Text('No portfolios available'));
+    }
+
     final currentPortfolio = portfolios[selectedPortfolioIndex];
     return Column(
       children: [
@@ -388,17 +477,14 @@ class _CryptoListScreenState extends State<CryptoListScreen> {
                   IconButton(
                     icon: Icon(Icons.edit),
                     onPressed: () => renamePortfolio(currentPortfolio),
-                    tooltip: 'Rename Portfolio',
-                  ),
-                  IconButton(
-                    icon: Icon(Icons.add),
-                    onPressed: createNewPortfolio,
-                    tooltip: 'New Portfolio',
                   ),
                   IconButton(
                     icon: Icon(Icons.delete),
                     onPressed: () => deletePortfolio(currentPortfolio),
-                    tooltip: 'Delete Portfolio',
+                  ),
+                  IconButton(
+                    icon: Icon(Icons.add),
+                    onPressed: createNewPortfolio,
                   ),
                 ],
               ),
@@ -408,8 +494,8 @@ class _CryptoListScreenState extends State<CryptoListScreen> {
         Padding(
           padding: const EdgeInsets.all(8.0),
           child: Text(
-            'Total Portfolio Value: \$${currentPortfolio.totalValue.toStringAsFixed(2)}',
-            style: Theme.of(context).textTheme.titleLarge,
+            'Total Value: \$${currentPortfolio.totalValue.toStringAsFixed(2)}',
+            style: Theme.of(context).textTheme.headlineSmall,
           ),
         ),
         Expanded(
@@ -417,61 +503,36 @@ class _CryptoListScreenState extends State<CryptoListScreen> {
             itemCount: currentPortfolio.cryptocurrencies.length,
             itemBuilder: (context, index) {
               final crypto = currentPortfolio.cryptocurrencies[index];
-              return Dismissible(
-                key: Key(crypto.id),
-                background: Container(
-                  color: Colors.red,
-                  alignment: Alignment.centerRight,
-                  padding: EdgeInsets.only(right: 20),
-                  child: Icon(Icons.delete, color: Colors.white),
-                ),
-                direction: DismissDirection.endToStart,
-                onDismissed: (direction) {
-                  removeFromPortfolio(crypto, currentPortfolio);
-                },
+              return Card(
                 child: ListTile(
                   title: Text(crypto.name),
-                  subtitle: Text('Amount: ${crypto.amount}'),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Amount: ${crypto.amount}'),
+                      Text('Value: \$${crypto.value.toStringAsFixed(2)}'),
+                    ],
+                  ),
                   trailing: Row(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      Text('\$${crypto.value.toStringAsFixed(2)}'),
                       IconButton(
-                        icon: Icon(Icons.move_to_inbox),
-                        onPressed: () => moveCryptoToAnotherPortfolio(crypto, currentPortfolio),
-                        tooltip: 'Move to Another Portfolio',
+                        icon: Icon(Icons.swap_horiz),
+                        onPressed: () => moveCryptoToAnotherPortfolio(
+                          crypto,
+                          currentPortfolio,
+                        ),
+                      ),
+                      IconButton(
+                        icon: Icon(Icons.delete),
+                        onPressed: () =>
+                            removeFromPortfolio(crypto, currentPortfolio),
                       ),
                     ],
                   ),
                 ),
               );
             },
-          ),
-        ),
-        Padding(
-          padding: const EdgeInsets.all(8.0),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              ElevatedButton(
-                onPressed: () {
-                  savePortfolios();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('Portfolios saved manually')),
-                  );
-                },
-                child: Text('Save Portfolios'),
-              ),
-              ElevatedButton(
-                onPressed: () {
-                  clearSharedPreferences();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(content: Text('SharedPreferences cleared')),
-                  );
-                },
-                child: Text('Clear SharedPreferences'),
-              ),
-            ],
           ),
         ),
       ],
@@ -490,7 +551,7 @@ class _CryptoListScreenState extends State<CryptoListScreen> {
             onChanged: (value) {
               newName = value;
             },
-            controller: TextEditingController(text: newName),
+            controller: TextEditingController(text: portfolio.name),
           ),
           actions: <Widget>[
             TextButton(
@@ -518,42 +579,44 @@ class _CryptoListScreenState extends State<CryptoListScreen> {
   }
 
   void deletePortfolio(Portfolio portfolio) {
-    if (portfolios.length > 1) {
-      showDialog(
-        context: context,
-        builder: (BuildContext context) {
-          return AlertDialog(
-            title: Text('Delete Portfolio'),
-            content: Text('Are you sure you want to delete "${portfolio.name}"?'),
-            actions: <Widget>[
-              TextButton(
-                child: Text('Cancel'),
-                onPressed: () {
-                  Navigator.of(context).pop();
-                },
-              ),
-              TextButton(
-                child: Text('Delete'),
-                onPressed: () {
-                  setState(() {
-                    portfolios.remove(portfolio);
-                    if (selectedPortfolioIndex >= portfolios.length) {
-                      selectedPortfolioIndex = portfolios.length - 1;
-                    }
-                  });
-                  savePortfolios();
-                  Navigator.of(context).pop();
-                },
-              ),
-            ],
-          );
-        },
-      );
-    } else {
+    if (portfolios.length <= 1) {
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Cannot delete the only portfolio')),
+        SnackBar(content: Text('Cannot delete the last portfolio')),
       );
+      return;
     }
+
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: Text('Delete Portfolio'),
+          content:
+              Text('Are you sure you want to delete ${portfolio.name}?'),
+          actions: <Widget>[
+            TextButton(
+              child: Text('Cancel'),
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+            ),
+            TextButton(
+              child: Text('Delete'),
+              onPressed: () {
+                setState(() {
+                  portfolios.remove(portfolio);
+                  if (selectedPortfolioIndex >= portfolios.length) {
+                    selectedPortfolioIndex = portfolios.length - 1;
+                  }
+                });
+                savePortfolios();
+                Navigator.of(context).pop();
+              },
+            ),
+          ],
+        );
+      },
+    );
   }
 
   void removeFromPortfolio(Cryptocurrency crypto, Portfolio portfolio) {
@@ -567,63 +630,88 @@ class _CryptoListScreenState extends State<CryptoListScreen> {
   }
 
   void moveCryptoToAnotherPortfolio(Cryptocurrency crypto, Portfolio sourcePortfolio) {
+    if (portfolios.length <= 1) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Create another portfolio first to move cryptocurrencies')),
+      );
+      return;
+    }
+
     showDialog(
       context: context,
       builder: (BuildContext context) {
-        int targetPortfolioIndex = portfolios.indexOf(sourcePortfolio);
-        return AlertDialog(
-          title: Text('Move ${crypto.name} to Another Portfolio'),
-          content: DropdownButton<int>(
-            value: targetPortfolioIndex,
-            items: portfolios.asMap().entries.where((entry) => entry.value != sourcePortfolio).map((entry) {
-              return DropdownMenuItem<int>(
-                value: entry.key,
-                child: Text(entry.value.name),
-              );
-            }).toList(),
-            onChanged: (int? newValue) {
-              if (newValue != null) {
-                targetPortfolioIndex = newValue;
-              }
-            },
-          ),
-          actions: <Widget>[
-            TextButton(
-              child: Text('Cancel'),
-              onPressed: () {
-                Navigator.of(context).pop();
-              },
-            ),
-            TextButton(
-              child: Text('Move'),
-              onPressed: () {
-                setState(() {
-                  sourcePortfolio.cryptocurrencies.remove(crypto);
-                  portfolios[targetPortfolioIndex].cryptocurrencies.add(crypto);
-                });
-                savePortfolios();
-                Navigator.of(context).pop();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(content: Text('${crypto.name} moved to ${portfolios[targetPortfolioIndex].name}')),
-                );
-              },
-            ),
-          ],
+        String? selectedPortfolioId = portfolios
+            .where((p) => p.id != sourcePortfolio.id)
+            .first
+            .id;
+
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              title: Text('Move ${crypto.name} to Another Portfolio'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  DropdownButton<String>(
+                    value: selectedPortfolioId,
+                    items: portfolios
+                        .where((p) => p.id != sourcePortfolio.id)
+                        .map((portfolio) {
+                          return DropdownMenuItem<String>(
+                            value: portfolio.id,
+                            child: Text(portfolio.name),
+                          );
+                        })
+                        .toList(),
+                    onChanged: (String? newValue) {
+                      setState(() {
+                        selectedPortfolioId = newValue;
+                      });
+                    },
+                  ),
+                ],
+              ),
+              actions: <Widget>[
+                TextButton(
+                  child: Text('Cancel'),
+                  onPressed: () {
+                    Navigator.of(context).pop();
+                  },
+                ),
+                TextButton(
+                  child: Text('Move'),
+                  onPressed: () {
+                    if (selectedPortfolioId != null) {
+                      final targetPortfolio = portfolios.firstWhere(
+                        (p) => p.id == selectedPortfolioId
+                      );
+                      setState(() {
+                        sourcePortfolio.cryptocurrencies.remove(crypto);
+                        targetPortfolio.cryptocurrencies.add(crypto);
+                      });
+                      savePortfolios();
+                      Navigator.of(context).pop();
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('${crypto.name} moved to ${targetPortfolio.name}')),
+                      );
+                    }
+                  },
+                ),
+              ],
+            );
+          },
         );
       },
     );
   }
 
-  void filterCryptoList(String query) {
-    setState(() {
-      filteredCryptoList = cryptoList
-          .where((crypto) =>
-              crypto.name.toLowerCase().contains(query.toLowerCase()) ||
-              crypto.symbol.toLowerCase().contains(query.toLowerCase()))
-          .toList();
-    });
-  }
-
+  /// Handles adding cryptocurrency to portfolio with proper UI feedback.
+  /// 
+  /// CRITICAL FUNCTIONALITY:
+  /// 1. Shows portfolio selection dialog
+  /// 2. Maintains amount input
+  /// 3. Handles validation and feedback
+  /// 4. Updates portfolio state
   void addToPortfolio(Cryptocurrency crypto) {
     showDialog(
       context: context,
