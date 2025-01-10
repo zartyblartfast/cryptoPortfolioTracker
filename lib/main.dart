@@ -4,11 +4,13 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'models/cryptocurrency.dart';
 import 'models/portfolio.dart';
 import 'models/api_source.dart';
 import 'screens/crypto_detail_screen.dart';
 import 'services/api_service.dart';
+import 'widgets/crypto_chart.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -47,13 +49,14 @@ class CryptoListScreen extends StatefulWidget {
 }
 
 class _CryptoListScreenState extends State<CryptoListScreen> with SingleTickerProviderStateMixin {
-  final ApiService apiService = ApiService();
+  final ApiService _apiService = ApiService();
+  List<Cryptocurrency> _cryptoList = [];
+  List<Cryptocurrency> _filteredList = [];
   List<Portfolio> portfolios = [];
-  List<Cryptocurrency> cryptoList = [];
-  List<Cryptocurrency> filteredCryptoList = [];
+  Portfolio? _selectedPortfolio;
+  bool _isLoading = true;
+  String _searchTerm = '';
   int selectedPortfolioIndex = 0;
-  bool isLoading = true;
-  TextEditingController searchController = TextEditingController();
   late TabController _tabController;
 
   @override
@@ -70,13 +73,12 @@ class _CryptoListScreenState extends State<CryptoListScreen> with SingleTickerPr
   void dispose() {
     _tabController.removeListener(_handleTabChange);
     _tabController.dispose();
-    searchController.dispose();
     super.dispose();
   }
 
   void _handleTabChange() {
     if (_tabController.index == 0) { // Cryptocurrencies tab
-      filterCryptoList(searchController.text);
+      filterCryptoList(_searchTerm);
     }
   }
 
@@ -136,21 +138,21 @@ class _CryptoListScreenState extends State<CryptoListScreen> with SingleTickerPr
 
   Future<void> fetchCryptoData() async {
     setState(() {
-      isLoading = true;
+      _isLoading = true;
     });
 
     try {
-      final cryptos = await apiService.fetchCryptoData();
+      final cryptos = await _apiService.fetchCryptoData();
       setState(() {
-        cryptoList = cryptos;
-        filteredCryptoList = List.from(cryptoList);
-        isLoading = false;
+        _cryptoList = cryptos;
+        _filteredList = List.from(_cryptoList);
+        _isLoading = false;
       });
       updatePortfolioValues();
     } catch (e) {
       print('Error fetching data: $e');
       setState(() {
-        isLoading = false;
+        _isLoading = false;
       });
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Failed to load data: $e')),
@@ -161,7 +163,7 @@ class _CryptoListScreenState extends State<CryptoListScreen> with SingleTickerPr
   void updatePortfolioValues() {
     for (var portfolio in portfolios) {
       for (var portfolioCrypto in portfolio.cryptocurrencies) {
-        final currentData = cryptoList.firstWhere(
+        final currentData = _cryptoList.firstWhere(
           (c) => c.id == portfolioCrypto.id,
           orElse: () => portfolioCrypto,
         );
@@ -177,9 +179,9 @@ class _CryptoListScreenState extends State<CryptoListScreen> with SingleTickerPr
   void filterCryptoList(String query) {
     setState(() {
       if (query.isEmpty) {
-        filteredCryptoList = List.from(cryptoList);
+        _filteredList = List.from(_cryptoList);
       } else {
-        filteredCryptoList = cryptoList
+        _filteredList = _cryptoList
             .where((crypto) =>
                 crypto.name.toLowerCase().contains(query.toLowerCase()) ||
                 crypto.symbol.toLowerCase().contains(query.toLowerCase()))
@@ -227,7 +229,7 @@ class _CryptoListScreenState extends State<CryptoListScreen> with SingleTickerPr
   /// 2. Preserves long-press and tap interactions
   /// 3. Keeps all data formatting (currency, percentages, B/M suffixes)
   Widget buildCryptocurrenciesTab() {
-    if (isLoading) {
+    if (_isLoading) {
       return Center(child: CircularProgressIndicator());
     }
 
@@ -243,13 +245,17 @@ class _CryptoListScreenState extends State<CryptoListScreen> with SingleTickerPr
                     labelText: 'Search cryptocurrencies',
                     border: OutlineInputBorder(),
                   ),
-                  controller: searchController,
-                  onChanged: filterCryptoList,
+                  onChanged: (value) {
+                    setState(() {
+                      _searchTerm = value;
+                    });
+                    filterCryptoList(value);
+                  },
                 ),
               ),
               const SizedBox(width: 16),
               DropdownButton<ApiSource>(
-                value: apiService.currentSource,
+                value: _apiService.currentSource,
                 items: ApiSource.values.map((source) {
                   return DropdownMenuItem<ApiSource>(
                     value: source,
@@ -259,7 +265,7 @@ class _CryptoListScreenState extends State<CryptoListScreen> with SingleTickerPr
                 onChanged: (ApiSource? newSource) {
                   if (newSource != null) {
                     setState(() {
-                      apiService.currentSource = newSource;
+                      _apiService.currentSource = newSource;
                     });
                     fetchCryptoData();
                   }
@@ -319,21 +325,13 @@ class _CryptoListScreenState extends State<CryptoListScreen> with SingleTickerPr
               ),
               Expanded(
                 child: ListView.builder(
-                  itemCount: filteredCryptoList.length,
+                  itemCount: _filteredList.length,
                   itemBuilder: (context, index) {
-                    final crypto = filteredCryptoList[index];
+                    final crypto = _filteredList[index];
                     return Card(
                       child: InkWell(
                         onTap: () {
-                          Navigator.push(
-                            context,
-                            MaterialPageRoute(
-                              builder: (context) => CryptoDetailScreen(
-                                crypto: crypto,
-                                addToPortfolio: addToPortfolio,
-                              ),
-                            ),
-                          );
+                          _showCryptoDetails(crypto);
                         },
                         onLongPress: () => addToPortfolio(crypto),
                         child: Padding(
@@ -705,13 +703,164 @@ class _CryptoListScreenState extends State<CryptoListScreen> with SingleTickerPr
     );
   }
 
-  /// Handles adding cryptocurrency to portfolio with proper UI feedback.
-  /// 
-  /// CRITICAL FUNCTIONALITY:
-  /// 1. Shows portfolio selection dialog
-  /// 2. Maintains amount input
-  /// 3. Handles validation and feedback
-  /// 4. Updates portfolio state
+  void _showCryptoDetails(Cryptocurrency crypto) {
+    showDialog(
+      context: context,
+      builder: (context) => Dialog(
+        child: Container(
+          width: MediaQuery.of(context).size.width * 0.8,
+          height: MediaQuery.of(context).size.height * 0.8,
+          padding: const EdgeInsets.all(16.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              // Title and close button
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Expanded(
+                    child: Text(
+                      '${crypto.name} (${crypto.symbol.toUpperCase()})',
+                      style: const TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.close),
+                    onPressed: () => Navigator.of(context).pop(),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 8),
+              // Chart
+              Expanded(
+                child: CryptoChart(
+                  symbol: crypto.symbol,
+                  name: crypto.name,
+                  apiService: _apiService,
+                ),
+              ),
+              const SizedBox(height: 8),
+              // Price and 24h change
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('Price: \$${crypto.price.toStringAsFixed(2)}'),
+                  Text(
+                    '24h: ${crypto.percentChange24h >= 0 ? '+' : ''}${crypto.percentChange24h.toStringAsFixed(2)}%',
+                    style: TextStyle(
+                      color: crypto.percentChange24h >= 0 ? Colors.green : Colors.red,
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              // Market cap and volume
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('Market Cap: \$${_formatLargeNumber(crypto.marketCap)}'),
+                  Text('Volume (24h): \$${_formatLargeNumber(crypto.volume24h)}'),
+                ],
+              ),
+              const SizedBox(height: 8),
+              // Add to portfolio button
+              Row(
+                mainAxisAlignment: MainAxisAlignment.end,
+                children: [
+                  TextButton(
+                    onPressed: () => _addCryptoToPortfolio(crypto),
+                    child: const Text('Add to Portfolio'),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  void _addCryptoToPortfolio(Cryptocurrency crypto) {
+    if (_selectedPortfolio == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please select a portfolio first')),
+      );
+      return;
+    }
+
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        double amount = 0;
+        return AlertDialog(
+          title: Text('Add ${crypto.name} to Portfolio'),
+          content: TextField(
+            keyboardType: TextInputType.number,
+            decoration: const InputDecoration(labelText: 'Amount'),
+            onChanged: (value) {
+              amount = double.tryParse(value) ?? 0;
+            },
+          ),
+          actions: [
+            TextButton(
+              child: const Text('Cancel'),
+              onPressed: () => Navigator.of(context).pop(),
+            ),
+            TextButton(
+              child: const Text('Add'),
+              onPressed: () {
+                if (amount > 0) {
+                  setState(() {
+                    crypto.amount = amount;
+                    if (!_selectedPortfolio!.cryptocurrencies.any((c) => c.id == crypto.id)) {
+                      _selectedPortfolio!.cryptocurrencies.add(crypto);
+                    }
+                  });
+                  savePortfolios();
+                  Navigator.of(context).pop();
+                  Navigator.of(context).pop(); // Close the details dialog
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(content: Text('${crypto.name} added to portfolio')),
+                  );
+                }
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  void _removeCryptoFromPortfolio(Cryptocurrency crypto) {
+    if (_selectedPortfolio == null) return;
+
+    setState(() {
+      _selectedPortfolio!.cryptocurrencies.removeWhere((c) => c.id == crypto.id);
+    });
+    savePortfolios();
+    Navigator.of(context).pop(); // Close the details dialog
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('${crypto.name} removed from portfolio')),
+    );
+  }
+
+  String _formatLargeNumber(double number) {
+    if (number >= 1e12) {
+      return '${(number / 1e12).toStringAsFixed(2)}T';
+    } else if (number >= 1e9) {
+      return '${(number / 1e9).toStringAsFixed(2)}B';
+    } else if (number >= 1e6) {
+      return '${(number / 1e6).toStringAsFixed(2)}M';
+    } else if (number >= 1e3) {
+      return '${(number / 1e3).toStringAsFixed(2)}K';
+    }
+    return number.toStringAsFixed(2);
+  }
+
   void addToPortfolio(Cryptocurrency crypto) {
     showDialog(
       context: context,

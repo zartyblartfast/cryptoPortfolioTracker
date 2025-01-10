@@ -1,0 +1,23 @@
+// Map of common cryptocurrency symbols to their CoinGecko IDs
+const Map<String, String> coinGeckoIds = {
+  'BTC': 'bitcoin',
+  'ETH': 'ethereum',
+  'USDT': 'tether',
+  'BNB': 'binancecoin',
+  'XRP': 'ripple',
+  'SOL': 'solana',
+  'ADA': 'cardano',
+  'DOGE': 'dogecoin',
+  'TRX': 'tron',
+  'LINK': 'chainlink',
+  'DOT': 'polkadot',
+  'MATIC': 'matic-network',
+  'LTC': 'litecoin',
+  'BCH': 'bitcoin-cash',
+  'XLM': 'stellar',
+  'UNI': 'uniswap',
+  'AVAX': 'avalanche-2',
+  'ATOM': 'cosmos',
+  'XMR': 'monero',
+  'ETC': 'ethereum-classic',
+};

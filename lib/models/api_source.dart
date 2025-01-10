@@ -1,27 +1,22 @@
 enum ApiSource {
-  coinpaprika,
-  coincap,
-  coingecko;
+  coinpaprika(
+    displayName: 'Coinpaprika',
+    baseUrl: 'https://api.coinpaprika.com/v1',
+  ),
+  coincap(
+    displayName: 'CoinCap',
+    baseUrl: 'https://api.coincap.io/v2',
+  ),
+  coingecko(
+    displayName: 'CoinGecko',
+    baseUrl: 'https://api.coingecko.com/api/v3',
+  );
 
-  String get displayName {
-    switch (this) {
-      case ApiSource.coinpaprika:
-        return 'Coinpaprika';
-      case ApiSource.coincap:
-        return 'CoinCap';
-      case ApiSource.coingecko:
-        return 'CoinGecko';
-    }
-  }
+  final String displayName;
+  final String baseUrl;
 
-  String get baseUrl {
-    switch (this) {
-      case ApiSource.coinpaprika:
-        return 'https://api.coinpaprika.com/v1';
-      case ApiSource.coincap:
-        return 'https://api.coincap.io/v2';
-      case ApiSource.coingecko:
-        return 'https://api.coingecko.com/api/v3';
-    }
-  }
+  const ApiSource({
+    required this.displayName,
+    required this.baseUrl,
+  });
 }
